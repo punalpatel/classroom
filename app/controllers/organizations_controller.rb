@@ -1,37 +1,35 @@
 # frozen_string_literal: true
 class OrganizationsController < ApplicationController
-  include OrganizationAuthorization
+  include OrganizationsHelper
 
-  before_action :ensure_team_management_flipper_is_enabled, only: [:show_groupings]
-
-  before_action :authorize_organization_addition,     only: [:create]
-  before_action :set_users_github_organizations,      only: [:index, :new, :create]
-  before_action :add_current_user_to_organizations,   only: [:index]
-  before_action :paginate_users_github_organizations, only: [:new, :create]
-
-  skip_before_action :set_organization, :authorize_organization_access, only: [:index, :new, :create]
+  before_action :authorize_organization_access, except: [:index, :new, :create]
+  before_action :add_user_to_organizations,     only: [:index]
 
   def index
-    @organizations = current_user.organizations.includes(:users).page(params[:page])
+    @organizations = current_user.organizations.page(params[:page])
   end
 
   def new
-    @organization = Organization.new
+    @view ||= Organizations::NewView.new(user: current_user)
   end
 
   def create
-    @organization = Organization.new(new_organization_params)
+    organization_result = Organization::Creator.perform(
+      users: [current_user],
+      github_id: new_organization_params['github_id']
+    )
 
-    if @organization.save
-      redirect_to setup_organization_path(@organization)
+    if organization_result.success?
+      redirect_to setup_organization_path(organization_result.organization)
     else
-      render :new
+      flash[:error] = organization_result.error
+      redirect_to new_organization_path
     end
   end
 
   def show
     @assignments = Kaminari
-                   .paginate_array(@organization.all_assignments(with_invitations: true)
+                   .paginate_array(current_organization.all_assignments(with_invitations: true)
                    .sort_by(&:updated_at))
                    .page(params[:page])
   end
@@ -43,23 +41,24 @@ class OrganizationsController < ApplicationController
   end
 
   def show_groupings
-    @groupings = @organization.groupings
+    ensure_team_management_flipper_is_enabled
+    @groupings = current_organization.groupings
   end
 
   def update
-    if @organization.update_attributes(update_organization_params)
-      flash[:success] = "Organization \"#{@organization.title}\" updated"
-      redirect_to @organization
+    if current_organization.update_attributes(update_organization_params)
+      flash[:success] = "Organization \"#{current_organization.title}\" updated"
+      redirect_to current_organization
     else
       render :edit
     end
   end
 
   def destroy
-    if @organization.update_attributes(deleted_at: Time.zone.now)
-      DestroyResourceJob.perform_later(@organization)
+    if current_organization.update_attributes(deleted_at: Time.zone.now)
+      DestroyResourceJob.perform_later(current_organization)
 
-      flash[:success] = "Your organization, @#{@organization.github_organization.login} is being reset"
+      flash[:success] = "Your organization, @#{current_organization.github_organization.login} is being reset"
       redirect_to organizations_path
     else
       render :edit
@@ -76,77 +75,45 @@ class OrganizationsController < ApplicationController
   end
 
   def setup_organization
-    if @organization.update_attributes(update_organization_params)
-      redirect_to invite_organization_path(@organization)
+    organization_result = Organization::Editor.perform(
+      organization,
+      title: update_organization_params[:title]
+    )
+
+    if organization_result.success?
+      redirect_to invite_organization_path(current_organization)
     else
-      render :setup
+      flash[:error] = organization_result.error
+      redirect_to :setup
     end
   end
 
   private
 
-  def authorize_organization_addition
-    new_github_organization = github_organization_from_params
+  # TODO: :fire: this thing to the ground.
+  # I _loath_ the fact that we do this everytime user comes to the index page
+  # rubocop:disable Metrics/AbcSize
+  def add_user_to_organizations
+    memberships = current_user.github_user.organization_memberships
+    user_organization_ids = current_user.organizations.pluck(:github_id)
 
-    return if new_github_organization.admin?(current_user.github_user.login)
-    raise NotAuthorized, 'You are not permitted to add this organization as a classroom'
-  end
+    memberships.keep_if do |membership|
+      !user_organization_ids.include?(membership.organization.id) && membership.role == 'admin'
+    end
 
-  def github_organization_from_params
-    @github_organization_from_params ||= GitHubOrganization.new(current_user.github_client,
-                                                                params[:organization][:github_id].to_i)
+    github_organization_ids = memberships.map { |membership| membership.organization.id }
+
+    Organization.unscoped.select(:id).where(github_id: github_organization_ids).each do |organization|
+      Organization::Editor.add_users(organization, [current_user])
+    end
   end
+  # rubocop:enable Metrics/AbcSize
 
   def new_organization_params
-    github_org = github_organization_from_params
-    title      = github_org.name.present? ? github_org.name : github_org.login
-
-    params
-      .require(:organization)
-      .permit(:github_id)
-      .merge(users: [current_user])
-      .merge(title: title)
-  end
-
-  def set_organization
-    @organization = Organization.find_by!(slug: params[:id])
-  end
-
-  def set_users_github_organizations
-    @users_github_organizations = current_user.github_user.organization_memberships.map do |membership|
-      {
-        classroom: Organization.unscoped.includes(:users).find_by(github_id: membership.organization.id),
-        github_id: membership.organization.id,
-        login:     membership.organization.login,
-        role:      membership.role
-      }
-    end
-  end
-
-  # Check if the current user has any organizations with admin privilege,
-  # if so add the user to the corresponding classroom automatically.
-  def add_current_user_to_organizations
-    @users_github_organizations.each do |organization|
-      classroom = organization[:classroom]
-      if classroom.present? && !classroom.users.include?(current_user)
-        create_user_organization_access(classroom)
-      end
-    end
-  end
-
-  def create_user_organization_access(organization)
-    github_org = GitHubOrganization.new(current_user.github_client, organization.github_id)
-    return unless github_org.admin?(current_user.github_user.login)
-    organization.users << current_user
-  end
-
-  def paginate_users_github_organizations
-    @users_github_organizations = Kaminari.paginate_array(@users_github_organizations).page(params[:page]).per(24)
+    params.require(:organization).permit(:github_id)
   end
 
   def update_organization_params
-    params
-      .require(:organization)
-      .permit(:title)
+    params.require(:organization).permit(:title)
   end
 end

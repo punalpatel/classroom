@@ -11,6 +11,13 @@ RSpec.describe Organization, type: :model do
     end
   end
 
+  describe '#admin?' do
+    it 'checks to see if the user is an owner of org' do
+      expect(subject).to respond_to(:admin?)
+      expect(subject.admin?(subject.users.first)).to be_truthy
+    end
+  end
+
   describe '#all_assignments' do
     context 'new Organization' do
       it 'returns an empty array' do

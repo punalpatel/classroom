@@ -26,6 +26,10 @@ class Organization < ApplicationRecord
 
   before_destroy :silently_remove_organization_webhook
 
+  def admin?(user)
+    users.pluck(:id).include?(user.id)
+  end
+
   def all_assignments(with_invitations: false)
     return assignments + group_assignments unless with_invitations
 
@@ -44,11 +48,6 @@ class Organization < ApplicationRecord
 
   def slugify
     self.slug = "#{github_id} #{title}".parameterize
-  end
-
-  def create_organization_webhook(webhook_url)
-    webhook = github_organization.create_organization_webhook(config: { url: webhook_url })
-    update_attributes(webhook_id: webhook.id)
   end
 
   def silently_remove_organization_webhook

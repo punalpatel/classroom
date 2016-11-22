@@ -3,20 +3,21 @@
     <h2 class="site-content-heading">Select an organization for your new classroom</h2>
   </div>
 
-  <div class="site-content-body">
-    <% if @users_github_organizations.empty? %>
+  <div class="site-content-body js-organization-select">
+    <div class="js-loader">Loading...</div>
+    <% if @view.github_organizations(params[:page]).empty? %>
       <div class="blankslate large-format spacious clean-background">
         <h3>Oh, you don’t have any organizations on your GitHub account.</h3>
 
         <p>Please <a href="https://github.com/organizations/new">create an organization on GitHub.com</a> and then come back.</p>
       </div>
     <% else %>
-      <%= form_for @organization do |f| %>
+      <%= form_for Organization.new do |f| %>
         <%= render 'shared/error_messages', object: f.object %>
 
         <div class="org-select-grid">
-          <% @users_github_organizations.each do |org| %>
-            <% if org[:role] == 'admin' && !org[:classroom].present? %>
+          <% @view.github_organizations(params[:page]).each do |org| %>
+            <% if org[:role] == 'admin' && !org[:classroom] %>
               <%= render partial: 'organization_select', locals: { org: org } %>
             <% else %>
               <%= render partial: 'disabled_organization_select', locals: { org: org } %>
@@ -27,7 +28,7 @@
       <% end %>
     <% end %>
 
-    <%= render partial: 'shared/pagination', locals: { collection: @users_github_organizations } %>
+    <%= render partial: 'shared/pagination', locals: { collection: @view.github_organizations(params[:page]) } %>
   </div>
 </div>
 

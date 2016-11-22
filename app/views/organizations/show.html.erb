@@ -3,7 +3,7 @@
 <div class="site-content">
   <div class="site-content-cap">
     <% if @assignments.present? %>
-      <%= link_to 'New assignment', new_assignment_organization_path(@organization), class: 'btn btn-green right', role: 'button'%>
+      <%= link_to 'New assignment', new_assignment_organization_path(current_organization), class: 'btn btn-green right', role: 'button'%>
     <% end %>
     <h2 class="site-content-heading">Assignments</h2>
   </div>
@@ -15,7 +15,7 @@
     <% else %>
       <div class="blankslate large-format spacious clean-background">
         <h3>This organization doesn’t have any assignments yet.</h3>
-        <%= link_to new_assignment_organization_path(@organization), class: 'btn btn-green btn-big', role: 'button' do %>
+        <%= link_to new_assignment_organization_path(current_organization), class: 'btn btn-green btn-big', role: 'button' do %>
           Create your first assignment
         <% end %>
       </div>
